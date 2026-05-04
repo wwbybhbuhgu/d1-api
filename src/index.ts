@@ -1,4 +1,4 @@
-// 修复后的完整 worker 代码 (JavaScript 版本)
+// 修复后的完整 worker 代码 (JavaScript 版本更新)
 export default {
   async fetch(request, env) {
     try {
