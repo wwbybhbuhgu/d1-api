@@ -1,69 +1,71 @@
-// 完整的留言板 Worker 代码
-// 绑定 D1 数据库时变量名必须为 DB
-// 访问路径：/api/comments
-
+// 增强版留言板 Worker（带错误捕获）
 export default {
   async fetch(request, env, ctx) {
-    // 处理 CORS 预检请求
-    if (request.method === 'OPTIONS') {
-      return new Response(null, {
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
-        },
-      });
-    }
-
-    const url = new URL(request.url);
-    const path = url.pathname;
-
-    // 只处理 /api/comments 路径
-    if (path !== '/api/comments') {
-      return jsonResponse({ error: 'Not Found' }, 404);
-    }
-
-    // 初始化数据库表（自动创建）
-    await initDB(env);
-
-    // GET：获取留言列表
-    if (request.method === 'GET') {
-      const comments = await getComments(env);
-      return jsonResponse(comments, 200);
-    }
-
-    // POST：添加留言
-    if (request.method === 'POST') {
-      let body;
-      try {
-        body = await request.json();
-      } catch (e) {
-        return jsonResponse({ error: 'Invalid JSON' }, 400);
+    try {
+      // CORS 预检
+      if (request.method === 'OPTIONS') {
+        return new Response(null, {
+          headers: {
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type',
+          },
+        });
       }
 
-      let { name, content } = body;
-      if (!content || content.trim() === '') {
-        return jsonResponse({ error: '内容不能为空' }, 400);
+      const url = new URL(request.url);
+      const path = url.pathname;
+
+      // 只处理 /api/comments
+      if (path !== '/api/comments') {
+        return jsonResponse({ error: 'Not Found' }, 404);
       }
 
-      // 简单防 XSS 和长度限制
-      name = sanitize(name?.trim() || '匿名');
-      content = sanitize(content.trim());
-
-      const success = await addComment(env, name, content);
-      if (success) {
-        return jsonResponse({ success: true }, 201);
-      } else {
-        return jsonResponse({ error: '数据库写入失败' }, 500);
+      // 确保 DB 已绑定
+      if (!env.DB) {
+        return jsonResponse({ error: 'D1 database not bound. Please bind DB variable.' }, 500);
       }
+
+      // 初始化表（自动创建）
+      await initDB(env);
+
+      // GET 请求
+      if (request.method === 'GET') {
+        const comments = await getComments(env);
+        return jsonResponse(comments, 200);
+      }
+
+      // POST 请求
+      if (request.method === 'POST') {
+        let body;
+        try {
+          body = await request.json();
+        } catch (e) {
+          return jsonResponse({ error: 'Invalid JSON' }, 400);
+        }
+        let { name, content } = body;
+        if (!content || content.trim() === '') {
+          return jsonResponse({ error: '内容不能为空' }, 400);
+        }
+        name = sanitize(name?.trim() || '匿名');
+        content = sanitize(content.trim());
+        const success = await addComment(env, name, content);
+        if (success) {
+          return jsonResponse({ success: true }, 201);
+        } else {
+          return jsonResponse({ error: '数据库写入失败' }, 500);
+        }
+      }
+
+      return jsonResponse({ error: 'Method Not Allowed' }, 405);
+    } catch (err) {
+      // 捕获所有未预料的异常并返回错误详情
+      console.error('Worker error:', err);
+      return jsonResponse({ error: 'Internal Server Error', details: err.message }, 500);
     }
-
-    // 其他方法不允许
-    return jsonResponse({ error: 'Method Not Allowed' }, 405);
   },
 };
 
-// 初始化 D1 表
 async function initDB(env) {
   try {
     await env.DB.exec(`
@@ -77,10 +79,10 @@ async function initDB(env) {
     `);
   } catch (e) {
     console.error('initDB error:', e);
+    throw new Error(`Failed to init DB: ${e.message}`);
   }
 }
 
-// 获取所有留言（按时间倒序）
 async function getComments(env) {
   const { results } = await env.DB.prepare(
     'SELECT id, name, content, timestamp FROM comments ORDER BY timestamp DESC'
@@ -88,7 +90,6 @@ async function getComments(env) {
   return results;
 }
 
-// 添加留言
 async function addComment(env, name, content) {
   const timestamp = Date.now();
   const { success } = await env.DB.prepare(
@@ -97,21 +98,19 @@ async function addComment(env, name, content) {
   return success;
 }
 
-// 简单的 XSS 过滤 （只转义基本字符）
 function sanitize(str) {
   if (!str) return '';
-  return str.replace(/[&<>]/g, function(m) {
+  return str.replace(/[&<>]/g, (m) => {
     if (m === '&') return '&amp;';
     if (m === '<') return '&lt;';
     if (m === '>') return '&gt;';
     return m;
-  }).substring(0, 500); // 限制长度
+  }).substring(0, 500);
 }
 
-// 统一 JSON 响应
 function jsonResponse(data, status) {
   return new Response(JSON.stringify(data), {
-    status: status,
+    status,
     headers: {
       'Content-Type': 'application/json',
       'Access-Control-Allow-Origin': '*',
