@@ -1,16 +1,14 @@
-// 管理员密钥：建议通过环境变量 ADMIN_KEY 配置，若未设置则使用硬编码默认值
-const ADMIN_KEY = env.ADMIN_KEY || 'your-hardcoded-secret-key-change-me';
-
+// 修复后的完整 worker 代码 (JavaScript 版本)
 export default {
   async fetch(request, env) {
     try {
-      // CORS 预检（支持 DELETE）
-      if (request.method === 'OPTIONS') {
+      // CORS 预检请求支持 (包括新的 DELETE 方法)
+      if (request.method === "OPTIONS") {
         return new Response(null, {
           headers: {
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-            'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
           },
         });
       }
@@ -18,102 +16,110 @@ export default {
       const url = new URL(request.url);
       const path = url.pathname;
 
-      // API 文档页面
-      if (path === '/api/docs') {
+      // 提供API文档页面
+      if (path === "/api/docs") {
         return new Response(getApiDocHtml(), {
-          headers: { 'Content-Type': 'text/html; charset=utf-8' },
+          headers: { "Content-Type": "text/html; charset=utf-8" },
         });
       }
 
-      // 只处理 /api/comments
-      if (path !== '/api/comments') {
-        return jsonResponse({ error: 'Not Found' }, 404);
+      // 仅处理 /api/comments 路径
+      if (path !== "/api/comments") {
+        return jsonResponse({ error: "Not Found" }, 404);
       }
 
+      // 确保 D1 数据库已绑定 (绑定名称为 DB)
       if (!env.DB) {
-        return jsonResponse({ error: 'D1 database not bound' }, 500);
+        return jsonResponse({ error: "D1 database not bound" }, 500);
       }
 
-      // GET：获取留言
-      if (request.method === 'GET') {
-        const { results } = await env.DB.preprepare(
-          'SELECT id, author as name, content FROM comments ORDER BY id DESC'
+      // 获取管理员密钥 (从环境变量中读取)
+      const ADMIN_KEY = env.ADMIN_KEY || "your-hardcoded-secret-key-change-me";
+
+      // GET：获取所有留言，按 ID 倒序排列
+      if (request.method === "GET") {
+        const { results } = await env.DB.prepare(
+          "SELECT id, author as name, content FROM comments ORDER BY id DESC"
         ).all();
-        const comments = results.map(row => ({ ...row, timestamp: row.id }));
+        const comments = results.map((row) => ({ ...row, timestamp: row.id }));
         return jsonResponse(comments, 200);
       }
 
-      // POST：添加留言
-      if (request.method === 'POST') {
+      // POST：新增留言
+      if (request.method === "POST") {
         let body;
         try {
           body = await request.json();
         } catch {
-          return jsonResponse({ error: 'Invalid JSON' }, 400);
+          return jsonResponse({ error: "Invalid JSON" }, 400);
         }
         let { name, content } = body;
-        if (!content || content.trim() === '') {
-          return jsonResponse({ error: '内容不能为空' }, 400);
+        if (!content || content.trim() === "") {
+          return jsonResponse({ error: "内容不能为空" }, 400);
         }
-        const author = sanitize(name?.trim() || '匿名');
+        const author = sanitize(name?.trim() || "匿名");
         const cleanContent = sanitize(content.trim());
-        await env.DB.prepare('INSERT INTO comments (author, content) VALUES (?, ?)')
-          .bind(author, cleanContent).run();
+        await env.DB.prepare("INSERT INTO comments (author, content) VALUES (?, ?)")
+          .bind(author, cleanContent)
+          .run();
         return jsonResponse({ success: true }, 201);
       }
 
-      // DELETE：删除留言（需要管理员 Key）
-      if (request.method === 'DELETE') {
-        const apiKey = request.headers.get('X-API-Key');
-        const expectedKey = env.ADMIN_KEY || 'your-hardcoded-secret-key-change-me';
-        if (!apiKey || apiKey !== expectedKey) {
-          return jsonResponse({ error: 'Unauthorized' }, 401);
+      // DELETE：根据 ID 删除留言 (需要验证管理员密钥)
+      if (request.method === "DELETE") {
+        const apiKey = request.headers.get("X-API-Key");
+        if (!apiKey || apiKey !== ADMIN_KEY) {
+          return jsonResponse({ error: "Unauthorized" }, 401);
         }
-        const id = url.searchParams.get('id');
+        const id = url.searchParams.get("id");
         if (!id) {
-          return jsonResponse({ error: 'Missing id parameter' }, 400);
+          return jsonResponse({ error: "Missing id parameter" }, 400);
         }
         const commentId = parseInt(id, 10);
         if (isNaN(commentId)) {
-          return jsonResponse({ error: 'Invalid id' }, 400);
+          return jsonResponse({ error: "Invalid id" }, 400);
         }
         // 检查留言是否存在
-        const { results } = await env.DB.prepare('SELECT id FROM comments WHERE id = ?')
-          .bind(commentId).all();
+        const { results } = await env.DB.prepare("SELECT id FROM comments WHERE id = ?")
+          .bind(commentId)
+          .all();
         if (results.length === 0) {
-          return jsonResponse({ error: 'Comment not found' }, 404);
+          return jsonResponse({ error: "Comment not found" }, 404);
         }
-        await env.DB.prepare('DELETE FROM comments WHERE id = ?')
-          .bind(commentId).run();
+        await env.DB.prepare("DELETE FROM comments WHERE id = ?")
+          .bind(commentId)
+          .run();
         return jsonResponse({ success: true, deletedId: commentId }, 200);
       }
 
-      return jsonResponse({ error: 'Method Not Allowed' }, 405);
+      return jsonResponse({ error: "Method Not Allowed" }, 405);
     } catch (err) {
       console.error(err);
-      return jsonResponse({ error: 'Internal Server Error', details: err.message }, 500);
+      return jsonResponse({ error: "Internal Server Error", details: err.message }, 500);
     }
-  }
+  },
 };
 
 function sanitize(str) {
-  if (!str) return '';
-  return str.replace(/[&<>]/g, (m) => {
-    if (m === '&') return '&amp;';
-    if (m === '<') return '&lt;';
-    if (m === '>') return '&gt;';
-    return m;
-  }).substring(0, 500);
+  if (!str) return "";
+  return str
+    .replace(/[&<>]/g, (m) => {
+      if (m === "&") return "&amp;";
+      if (m === "<") return "&lt;";
+      if (m === ">") return "&gt;";
+      return m;
+    })
+    .substring(0, 500);
 }
 
 function jsonResponse(data, status) {
   return new Response(JSON.stringify(data), {
     status,
     headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, X-API-Key',
+      "Content-Type": "application/json",
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+      "Access-Control-Allow-Headers": "Content-Type, X-API-Key",
     },
   });
 }
@@ -145,7 +151,7 @@ function getApiDocHtml() {
 
     <h2>1. 获取所有留言</h2>
     <div class="endpoint"><span class="method">GET</span> <span class="url">/api/comments</span></div>
-    <p>返回留言列表，按 id 倒序排列（最新在前）。示例响应：</p>
+    <p>返回留言列表，按 ID 倒序排列（最新在前）。示例响应：</p>
     <pre>[
   {
     "id": 3,
@@ -207,7 +213,7 @@ function getApiDocHtml() {
     loadComments();
     document.getElementById('commentContent').value = '';
   }
-  function escapeHtml(str) { ... }
+  function escapeHtml(str) { return str.replace(/[&<>]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[m])); }
   loadComments();
 &lt;/script&gt;</pre>
 
